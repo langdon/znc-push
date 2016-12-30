@@ -1,5 +1,5 @@
 version = $(shell git describe --dirty || echo dev)
-curl=no
+curl=yes
 
 ifneq ($(curl),no)
 	flags=-DUSE_CURL -lcurl
