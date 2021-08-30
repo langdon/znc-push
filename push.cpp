@@ -22,6 +22,7 @@
 #include <znc/Client.h>
 #include "time.h"
 #include <string.h>
+#include <regex>
 
 #ifdef USE_CURL
 #include <curl/curl.h>
@@ -130,6 +131,7 @@ class CPushMod : public CModule
 			defaults["username"] = "";
 			defaults["secret"] = "";
 			defaults["target"] = "";
+			defaults["extra_target"] = "";
 
 			// Notification settings
 			defaults["message_content"] = "{context}: [{nick}] {message}";
@@ -229,17 +231,22 @@ class CPushMod : public CModule
 		 * @param title Message title to use
 		 * @param context Channel or nick context
 		 */
-		void send_message(const CString& message, const CString& title="New Message", const CString& context="*push", const CNick& nick=CString("*push"))
+		void send_message(const CString& message, const CString& title="New Message", const CString& context="*push", const CNick& nick=CString("*push"), const CString& type="")
 		{
 			// Set the last notification time
 			last_notification_time[context] = time(NULL);
 
+			// Strip color codes and other formatting from message
+			CString stripped_message = message;
+			std::regex irc_format_regex("\\x02|\\x03(?:\\d{0,2}(?:,\\d{1,2})?)?|\\x0F|\\x16|\\x1D|\\x1F");
+			stripped_message = std::regex_replace(message, irc_format_regex, "");
+
 			// Shorten message if needed
 			unsigned int message_length = options["message_length"].ToUInt();
-			CString short_message = message;
+			CString short_message = stripped_message;
 			if (message_length > 0)
 			{
-				short_message = message.Ellipsize(message_length);
+				short_message = stripped_message.Ellipsize(message_length);
 			}
 
 			// Generate an ISO8601 date string
@@ -261,6 +268,7 @@ class CPushMod : public CModule
 			replace["{username}"] = options["username"];
 			replace["{secret}"] = options["secret"];
 			replace["{target}"] = options["target"];
+			replace["{extra_target}"] = options["extra_target"];
 			// network is special because it can be nullptr if the user has none set up yet
 			CIRCNetwork* network = GetNetwork();
 			if (network) {
@@ -483,6 +491,34 @@ class CPushMod : public CModule
 				params["description"] = message_content;
 				params["url"] = message_uri;
 			}
+			else if (service == "igloo")
+			{
+				if (options["target"] == "")
+				{
+					PutModule("Error: no devices are set");
+					return;
+				}
+
+				service_host = "api.iglooirc.com";
+				service_url = "/znc/push";
+
+				if (network != NULL)
+				{
+					params["network"] = network->GetName();
+					params["nick"] = network->GetNick();
+				}
+
+				params["sender"] = nick.GetNick();
+				params["channel"] = context;
+				params["message"] = message;
+				params["type"] = type;
+				params["device1"] = options["target"];
+
+				if (options["extra_target"] != "")
+				{
+					params["device2"] = options["extra_target"];
+				}
+			}
 			else if (service == "supertoasty")
 			{
 				if (options["secret"] == "")
@@ -667,7 +703,7 @@ class CPushMod : public CModule
 					return;
 				}
 
-				service_host = "discordapp.com";
+				service_host = "discord.com";
 				service_url = "/api/webhooks/" + options["secret"];
 
 				if (options["username"] != "")
@@ -1234,7 +1270,7 @@ class CPushMod : public CModule
 			{
 				CString title = "Highlight";
 
-				send_message(message, title, channel.GetName(), nick);
+				send_message(message, title, channel.GetName(), nick, "action");
 			}
 
 			return CONTINUE;
@@ -1253,7 +1289,7 @@ class CPushMod : public CModule
 			{
 				CString title = "Channel Notice";
 
-				send_message(message, title, channel.GetName(), nick);
+				send_message(message, title, channel.GetName(), nick, "notice");
 			}
 
 			return CONTINUE;
@@ -1289,7 +1325,7 @@ class CPushMod : public CModule
 			{
 				CString title = "Private Message";
 
-				send_message(message, title, nick.GetNick(), nick);
+				send_message(message, title, nick.GetNick(), nick, "action");
 			}
 
 			return CONTINUE;
@@ -1307,7 +1343,7 @@ class CPushMod : public CModule
 			{
 				CString title = "Private Notice";
 
-				send_message(message, title, nick.GetNick(), nick);
+				send_message(message, title, nick.GetNick(), nick, "notice");
 			}
 
 			return CONTINUE;
@@ -1472,6 +1508,10 @@ class CPushMod : public CModule
 						else if (value == "prowl")
 						{
 							PutModule("Note: Prowl requires setting the 'secret' option");
+						}
+						else if (value == "igloo")
+						{
+							PutModule("Note: Igloo requires adding your device with 'target'. An extra device can be added with 'extra_target'.");
 						}
 						else if (value == "supertoasty")
 						{
